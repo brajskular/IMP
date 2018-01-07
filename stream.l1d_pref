@@ -1,0 +1,91 @@
+#include "cache.h"
+#include "stream.h"
+
+
+int L1_ST_update(uint32_t cpu, uint64_t ip, uint64_t addr) {								// stream table update
+	STREAM_TABLE *pt = L1_ST[cpu];
+	int match;
+
+	for(match=0; match<NUM_ST_ENTRIES; match++)
+		if(pt[match].pc == ip) {												// stream entry found using PC
+			pt[match].addr = addr;												// update latest address
+			pt[match].stream_hit_cnt++;
+			// if(pt[match].stream_hit_cnt >= STREAM_THRESHOLD)
+			break;
+		}
+	if(match == NUM_ST_ENTRIES)													// entry not found,
+		for(match=0; match<NUM_ST_ENTRIES; match++)								// search for invalid entry
+			if(pt[match].pc == 0) {
+				pt[match].pc = ip;
+				pt[match].addr = addr;
+				pt[match].stream_hit_cnt++;
+				break;
+			}
+
+	if (match == NUM_ST_ENTRIES) {												// invalid entry not found, search for lru victim
+        for (match=0; match<NUM_ST_ENTRIES; match++) {
+            if (pt[match].lru == (NUM_ST_ENTRIES-1))
+                break;
+        }
+        pt[match].pc = ip;														// update stream table
+		pt[match].addr = addr;
+		pt[match].stream_hit_cnt++;
+    }
+
+
+		// L1_PF_DEBUG(printf("Stream table stats \npc: %lx addr: %lx hit_cnt: %lx lru: %lx table entry: %lx\n",
+		// 				pt[match].pc, pt[match].addr, pt[match].stream_hit_cnt, pt[match].lru, match));
+
+    int position = pt[match].lru;												// update lru
+    for (int j=0; j<NUM_ST_ENTRIES; j++) {
+        if (pt[j].lru < position)
+            pt[j].lru++;
+    }
+    pt[match].lru = 0;
+    return match;
+}
+
+
+void CACHE::l1d_prefetcher_initialize() 
+{
+	cout << endl << "L1D Stream Prefetcher" << endl;
+	for(int i=0; i<NUM_ST_ENTRIES; i++){
+		L1_ST[cpu][i].lru = i;
+		L1_PF_DEBUG(printf("lru: %lx\n",
+						L1_ST[cpu][i].lru));
+	}
+
+	
+}
+
+void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type)
+{
+	STREAM_TABLE *pt = L1_ST[cpu];
+	int pt_entry = 0,i;
+	uint64_t expected_addr,
+			 pref_addr,
+			 index;
+	uint32_t set = get_set(addr);
+	uint32_t way = get_way(addr, set);
+	uint64_t data = block[set][way].data;							// get the data in the addr, this is for index B[i]
+
+	pt_entry = L1_ST_update(cpu, ip, addr);							// update the stream table and get the entry
+	if((pt[pt_entry].stream_hit_cnt)%5 == STREAM_THRESHOLD){			// if streaming threshold reached, prefetch stream
+		for(i=0; i<STREAM_PREFETCH_DEGREE; i++){
+			pref_addr = ((pt[pt_entry].addr >> LOG2_BLOCK_SIZE) + i + 1) << LOG2_BLOCK_SIZE;
+			prefetch_line(ip, addr, pref_addr, FILL_L1);			// prefetch next N cache lines
+			L1_PF_DEBUG(printf("addr: %lx\npref_addr: %lx pref_candidate: %x\n",
+						addr, pref_addr, i));
+		}
+	}
+}
+
+void CACHE::l1d_prefetcher_cache_fill(uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t evicted_addr)
+{
+
+}
+
+void CACHE::l1d_prefetcher_final_stats()
+{
+	cout << endl << "L1D Stream Prefetcher final stats" << endl;
+}
