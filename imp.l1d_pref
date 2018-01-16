@@ -2,11 +2,13 @@
 
 #include "cache.h"
 #include "imp.h"
+#include "math.h"
 
 void L1_IPD_update(uint32_t cpu, uint64_t addr, int cache_hit, uint64_t ip, uint64_t data) {
 	uint64_t curr_block = (addr >> LOG2_BLOCK_SIZE), i, j, k,
 		base_addr = 0,
-		match = 0;
+		match = 0,
+		coefficient = 1;
 	INDIRECT_PATTERN_DETECTOR *pattern = L1_IPD[cpu];
 
 	if(cache_hit == 1){
@@ -53,22 +55,30 @@ void L1_IPD_update(uint32_t cpu, uint64_t addr, int cache_hit, uint64_t ip, uint
 					for(j=0; j<NUM_COEFFICIENTS; j++){
 						for(k=3; k>0; k--)						// Left shift the base_addr, since we are tracking only 4 base_addr
 	    					pattern[i].base_addr_arr[j][k] = pattern[i].base_addr_arr[j][k-1];
-	    				if(SHIFT_ARR[j] > 0)
-	    					pattern[i].base_addr_arr[j][0] = addr - (pattern[i].idx1 << SHIFT_ARR[j]);
-	    				else
-	    					pattern[i].base_addr_arr[j][0] = addr - (pattern[i].idx1 >> (-1*SHIFT_ARR[j]));
-	    				L1_PF_DEBUG(printf("calc_base_addr: %lx shift: %lx\n",
-						pattern[i].base_addr_arr[j][0], SHIFT_ARR[j]));
+	    				if(SHIFT_ARR[j] > 0){
+	    					coefficient = pow(2,SHIFT_ARR[j]);
+	    					pattern[i].base_addr_arr[j][0] = addr - ((pattern[i].idx1)*coefficient);
+	    				}
+	    				else{
+	    					coefficient = pow(2,(-1*SHIFT_ARR[j]));
+	    					pattern[i].base_addr_arr[j][0] = addr - ((pattern[i].idx1)/coefficient);
+	    				}
+	    				L1_PF_DEBUG(printf("calc_base_addr: %lx shift: %d coef: %lx\n",
+						pattern[i].base_addr_arr[j][0], SHIFT_ARR[j], coefficient));
 	    			}
 				}
 				else {			// index access after idx2 is found, so calculate base_addr and compare
 					L1_PF_DEBUG(printf("Miss after second access\nip: %lx idx1: %lx idx2: %lx miss_addr: %lx\n",
 						ip, pattern[i].idx1, pattern[i].idx2, addr));
 					for(j=0; j<NUM_COEFFICIENTS; j++){
-						if(SHIFT_ARR[j] > 0)
-							base_addr = addr - (pattern[i].idx2 << SHIFT_ARR[j]);
-						else
-							base_addr = addr - (pattern[i].idx2 >> (-1*SHIFT_ARR[j]));
+						if(SHIFT_ARR[j] > 0){
+							coefficient = pow(2,SHIFT_ARR[j]);
+							base_addr = addr - ((pattern[i].idx2)*coefficient);
+						}
+						else{
+							coefficient = pow(2,(-1*SHIFT_ARR[j]));
+							base_addr = addr - ((pattern[i].idx2)/coefficient);
+						}
 						L1_PF_DEBUG(printf("compare_base_addr: %lx\n",
 						base_addr));
 						for(k=0; k<NUM_BASE_ADDR_TRACKED; k++)
@@ -76,7 +86,10 @@ void L1_IPD_update(uint32_t cpu, uint64_t addr, int cache_hit, uint64_t ip, uint
 								L1_PF_DEBUG(printf("Match found!!\n"));
 								L1_IT_update(cpu, pattern[i].pid, pattern[i].idx2, base_addr, SHIFT_ARR[j]);
 								match = 1;
+								break;
 							}
+						if(match == 1)
+							break;
 					}
 					if(match == 1){						// if match found, free the IPD entry
 					pattern[i].pid = 0;
@@ -245,6 +258,7 @@ void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit
 	pt_entry = L1_ST_update(cpu, ip, addr);							// update the stream table and get the entry
 	if((pt[pt_entry].stream_hit_cnt)%5 == STREAM_THRESHOLD){			// if streaming threshold reached, prefetch stream
 		L1_IPD_update(cpu, addr, cache_hit, ip, data);				// also update pattern detector, idx1 now filled
+		pt[pt_entry].addr = addr;
 		for(i=0; i<STREAM_PREFETCH_DEGREE; i++){
 			pref_addr = ((pt[pt_entry].addr >> LOG2_BLOCK_SIZE) + i + 1) << LOG2_BLOCK_SIZE;
 			prefetch_line(ip, addr, pref_addr, FILL_L1);			// prefetch next N cache lines
@@ -259,7 +273,11 @@ void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit
 		if(pt[i].pc == ip && pt[i].enable == 1 && pt[i].indirect_hit_cnt <= IMP_PREFETCH_THRESHOLD) {	
 						// if it is stream access and indirect table entry is active
         L1_PF_DEBUG(printf("indirect prefetch enabled\n"));
-			expected_addr = (pt[i].index << pt[i].shift) + pt[i].base_addr;		// calculate expected addr
+        	if(pt[i].shift > 0)
+				expected_addr = (pt[i].index << pt[i].shift) + pt[i].base_addr;		// calculate expected addr
+			else
+				expected_addr = (pt[i].index >> (-1*pt[i].shift)) + pt[i].base_addr;
+			L1_PF_DEBUG(printf("expected_addr: %lx miss_addr: %lx shift: %lx\n", expected_addr, addr, pt[i].shift));
 			if(addr == expected_addr){								// if expected addr found, inc hit count
 				L1_PF_DEBUG(printf("hit cnt incremented\n"));
 				pt[i].indirect_hit_cnt++;							
