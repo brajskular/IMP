@@ -4,7 +4,7 @@
 #include "cache.h"
 
 // L1 IMP
-#define L1_PF_DEBUG_PRINT
+//#define L1_PF_DEBUG_PRINT
 #ifdef L1_PF_DEBUG_PRINT
 #define L1_PF_DEBUG(x) x
 #else
@@ -52,7 +52,6 @@ public:
 			 enable,
 			 index,
 			 base_addr,
-			 shift,
 			 indirect_hit_cnt,
 			 ind_type,
 			 next_way,
@@ -61,6 +60,7 @@ public:
 			 lru,
 			 exp_addr_found,
 			 pref_distance;
+	int shift;
 
 	PREFETCH_TABLE() {
 		pc = 0;
@@ -85,7 +85,7 @@ public:
 
 extern INDIRECT_PATTERN_DETECTOR L1_IPD[NUM_CPUS][NUM_IPD_ENTRIES];
 extern PREFETCH_TABLE L1_PT[NUM_CPUS][NUM_PT_ENTRIES];
-extern int SHIFT_ARR[NUM_COEFFICIENTS] = {-2,3,-4,-3};
+int SHIFT_ARR[NUM_COEFFICIENTS] = {2,3,0,-3};
 
 void L1_IPD_update(uint32_t cpu, uint64_t addr, int cache_hit, uint64_t ip, uint64_t data);
 void L1_IT_update(uint32_t cpu, uint64_t pid, uint64_t index, uint64_t base_addr, uint64_t shift);
